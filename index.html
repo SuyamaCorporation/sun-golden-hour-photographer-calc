@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Golden Hour Photographer Calculator</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gradient-to-b from-amber-50 to-orange-50 min-h-screen font-sans">
+<div class="max-w-2xl mx-auto px-4 py-8">
+  <h1 class="text-3xl font-bold text-amber-800 mb-1">Golden Hour Calculator</h1>
+  <p class="text-amber-600 mb-6 text-sm">Calculate photography light times for any location and date.</p>
+
+  <!-- Input form -->
+  <div class="bg-white rounded-2xl shadow p-6 mb-6">
+    <div class="grid grid-cols-2 gap-4 mb-4">
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1" for="lat">Latitude (-90 to 90)</label>
+        <input id="lat" type="number" min="-90" max="90" step="0.0001" value="35.6762" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400" aria-label="Latitude">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1" for="lon">Longitude (-180 to 180)</label>
+        <input id="lon" type="number" min="-180" max="180" step="0.0001" value="139.6503" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400" aria-label="Longitude">
+      </div>
+    </div>
+    <div class="mb-4">
+      <label class="block text-sm font-medium text-gray-700 mb-1" for="dateInput">Date</label>
+      <input id="dateInput" type="date" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400" aria-label="Date">
+    </div>
+    <div class="flex gap-3 flex-wrap">
+      <button onclick="calculate()" class="px-6 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-semibold text-sm" aria-label="Calculate golden hour times">Calculate</button>
+      <button onclick="saveLocation()" class="px-6 py-2 rounded-lg bg-orange-100 hover:bg-orange-200 text-orange-700 font-semibold text-sm" aria-label="Save current location">Save Location</button>
+    </div>
+  </div>
+
+  <!-- Results -->
+  <div id="results" class="bg-white rounded-2xl shadow p-6 mb-6 hidden">
+    <h2 class="text-lg font-semibold text-gray-800 mb-4">Light Times</h2>
+    <div class="grid grid-cols-1 gap-0" id="timesGrid"></div>
+  </div>
+
+  <!-- Saved locations -->
+  <div class="bg-white rounded-2xl shadow p-6">
+    <div class="flex items-center justify-between mb-3">
+      <h2 class="text-lg font-semibold text-gray-800">Saved Locations</h2>
+      <button onclick="clearLocations()" class="text-xs text-red-400 hover:text-red-600" aria-label="Clear all saved locations">Clear all</button>
+    </div>
+    <div id="savedList" class="space-y-2">
+      <p class="text-gray-400 text-sm italic">No saved locations.</p>
+    </div>
+  </div>
+</div>
+
+<script>
+const LS_KEY = 'goldenhr_locs';
+
+// Set today's date
+const today = new Date();
+document.getElementById('dateInput').value = today.toISOString().split('T')[0];
+
+// Solar calculation utilities
+function toRad(d) { return d * Math.PI / 180; }
+function toDeg(r) { return r * 180 / Math.PI; }
+
+function julianDay(date) {
+  const y = date.getUTCFullYear();
+  const m = date.getUTCMonth() + 1;
+  const d = date.getUTCDate();
+  return 367 * y - Math.floor(7 * (y + Math.floor((m + 9) / 12)) / 4)
+    + Math.floor(275 * m / 9) + d + 1721013.5;
+}
+
+function solarTimes(lat, lon, date) {
+  const JD = julianDay(date);
+  const n = JD - 2451545.0;
+  const L = (280.46 + 0.9856474 * n) % 360;
+  const g = toRad((357.528 + 0.9856003 * n) % 360);
+  const lambda = toRad(L + 1.915 * Math.sin(g) + 0.020 * Math.sin(2 * g));
+  const epsilon = toRad(23.439 - 0.0000004 * n);
+  const sinDec = Math.sin(epsilon) * Math.sin(lambda);
+  const dec = Math.asin(sinDec);
+  const cosDec = Math.cos(dec);
+  const cosLat = Math.cos(toRad(lat));
+  const sinLat = Math.sin(toRad(lat));
+
+  // Equation of time
+  const RA = toDeg(Math.atan2(Math.cos(epsilon) * Math.sin(lambda), Math.cos(lambda))) / 15;
+  const GMST = (6.697375 + 0.0657098242 * n) % 24;
+  const noon = 12 - ((GMST - RA + lon / 15) % 24 + 24) % 24 % 24;
+
+  function hourAngleForAlt(altDeg) {
+    const altRad = toRad(altDeg);
+    const cosHA = (Math.sin(altRad) - sinLat * sinDec) / (cosLat * cosDec);
+    if (cosHA < -1 || cosHA > 1) return null;
+    return toDeg(Math.acos(cosHA)) / 15;
+  }
+
+  const haRise = hourAngleForAlt(-0.833);
+  const haGoldenEnd = hourAngleForAlt(6);
+  const haBlueStart = hourAngleForAlt(-6);
+  const haCivilDawn = hourAngleForAlt(-6);
+
+  const times = {};
+  if (haRise !== null) {
+    times.civilDawn     = noon - hourAngleForAlt(-6);
+    times.sunrise       = noon - haRise;
+    times.goldenHrEnd   = noon - (haGoldenEnd || haRise - 1);
+    times.blueHourMEnd  = noon - (hourAngleForAlt(-4) || haRise);
+    times.blueHourEStart= noon + (hourAngleForAlt(-4) || haRise);
+    times.goldenHrStart = noon + (haGoldenEnd || haRise - 1);
+    times.sunset        = noon + haRise;
+    times.civilDusk     = noon + hourAngleForAlt(-6);
+  }
+  times.solarNoon = noon;
+  return times;
+}
+
+function decimalToTime(h) {
+  if (h == null || isNaN(h)) return '—';
+  h = ((h % 24) + 24) % 24;
+  const hours = Math.floor(h);
+  const mins = Math.round((h - hours) * 60);
+  const adjustedMins = mins === 60 ? 0 : mins;
+  const adjustedHours = mins === 60 ? (hours + 1) % 24 : hours;
+  const suffix = adjustedHours < 12 ? 'AM' : 'PM';
+  const h12 = adjustedHours % 12 || 12;
+  return `${h12}:${String(adjustedMins).padStart(2, '0')} ${suffix}`;
+}
+
+const TIME_EVENTS = [
+  { key: 'civilDawn',     label: 'Civil Dawn',            icon: '🌑', color: 'bg-indigo-100 text-indigo-800' },
+  { key: 'sunrise',       label: 'Sunrise',               icon: '🌅', color: 'bg-orange-100 text-orange-800' },
+  { key: 'goldenHrEnd',   label: 'Golden Hour End (AM)',  icon: '☀️', color: 'bg-amber-100 text-amber-800' },
+  { key: 'blueHourMEnd',  label: 'Blue Hour End (AM)',    icon: '💙', color: 'bg-blue-100 text-blue-800' },
+  { key: 'solarNoon',     label: 'Solar Noon',            icon: '🌞', color: 'bg-yellow-100 text-yellow-800' },
+  { key: 'blueHourEStart',label: 'Blue Hour Start (PM)',  icon: '💙', color: 'bg-blue-100 text-blue-800' },
+  { key: 'goldenHrStart', label: 'Golden Hour Start (PM)',icon: '🌇', color: 'bg-amber-100 text-amber-800' },
+  { key: 'sunset',        label: 'Sunset',                icon: '🌆', color: 'bg-orange-100 text-orange-800' },
+  { key: 'civilDusk',     label: 'Civil Dusk',            icon: '🌒', color: 'bg-indigo-100 text-indigo-800' },
+];
+
+function calculate() {
+  const lat = parseFloat(document.getElementById('lat').value);
+  const lon = parseFloat(document.getElementById('lon').value);
+  const dateStr = document.getElementById('dateInput').value;
+
+  if (isNaN(lat) || isNaN(lon) || !dateStr) {
+    alert('Please enter valid latitude, longitude, and date.');
+    return;
+  }
+  if (lat < -90 || lat > 90 || lon < -180 || lon > 180) {
+    alert('Latitude must be -90 to 90, longitude -180 to 180.');
+    return;
+  }
+
+  const date = new Date(dateStr + 'T12:00:00Z');
+  const times = solarTimes(lat, lon, date);
+
+  const grid = document.getElementById('timesGrid');
+  grid.innerHTML = '';
+  TIME_EVENTS.forEach(ev => {
+    const row = document.createElement('div');
+    row.className = 'flex items-center justify-between py-2 border-b border-gray-100 last:border-0';
+
+    const left = document.createElement('div');
+    left.className = 'flex items-center gap-2';
+    const icon = document.createElement('span');
+    icon.textContent = ev.icon;
+    const name = document.createElement('span');
+    name.className = 'text-sm text-gray-700';
+    name.textContent = ev.label;
+    left.appendChild(icon);
+    left.appendChild(name);
+
+    const right = document.createElement('span');
+    right.className = `text-sm font-mono font-semibold px-2 py-0.5 rounded ${ev.color}`;
+    right.textContent = decimalToTime(times[ev.key]);
+
+    row.appendChild(left);
+    row.appendChild(right);
+    grid.appendChild(row);
+  });
+
+  document.getElementById('results').classList.remove('hidden');
+}
+
+function saveLocation() {
+  const lat = parseFloat(document.getElementById('lat').value);
+  const lon = parseFloat(document.getElementById('lon').value);
+  if (isNaN(lat) || isNaN(lon)) return;
+
+  const name = prompt('Name this location:');
+  if (!name) return;
+
+  let locs = [];
+  try { locs = JSON.parse(localStorage.getItem(LS_KEY)) || []; } catch(e) {}
+  locs.push({ name, lat, lon });
+  localStorage.setItem(LS_KEY, JSON.stringify(locs));
+  renderSaved();
+}
+
+function loadLocation(lat, lon) {
+  document.getElementById('lat').value = lat;
+  document.getElementById('lon').value = lon;
+  calculate();
+}
+
+function deleteLocation(idx) {
+  let locs = [];
+  try { locs = JSON.parse(localStorage.getItem(LS_KEY)) || []; } catch(e) {}
+  locs.splice(idx, 1);
+  localStorage.setItem(LS_KEY, JSON.stringify(locs));
+  renderSaved();
+}
+
+function clearLocations() {
+  localStorage.removeItem(LS_KEY);
+  renderSaved();
+}
+
+function renderSaved() {
+  let locs = [];
+  try { locs = JSON.parse(localStorage.getItem(LS_KEY)) || []; } catch(e) {}
+  const list = document.getElementById('savedList');
+  list.innerHTML = '';
+  if (locs.length === 0) {
+    const p = document.createElement('p');
+    p.className = 'text-gray-400 text-sm italic';
+    p.textContent = 'No saved locations.';
+    list.appendChild(p);
+    return;
+  }
+  locs.forEach((loc, i) => {
+    const row = document.createElement('div');
+    row.className = 'flex items-center justify-between bg-amber-50 rounded-lg px-3 py-2';
+
+    const info = document.createElement('div');
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'font-medium text-gray-800 text-sm';
+    nameSpan.textContent = loc.name;
+    const coords = document.createElement('span');
+    coords.className = 'text-gray-400 text-xs ml-2';
+    coords.textContent = `(${loc.lat.toFixed(4)}, ${loc.lon.toFixed(4)})`;
+    info.appendChild(nameSpan);
+    info.appendChild(coords);
+
+    const actions = document.createElement('div');
+    actions.className = 'flex gap-2';
+    const loadBtn = document.createElement('button');
+    loadBtn.className = 'text-xs text-amber-700 hover:underline';
+    loadBtn.textContent = 'Load';
+    loadBtn.setAttribute('aria-label', 'Load location ' + loc.name);
+    loadBtn.onclick = () => loadLocation(loc.lat, loc.lon);
+    const delBtn = document.createElement('button');
+    delBtn.className = 'text-xs text-red-400 hover:underline';
+    delBtn.textContent = 'Delete';
+    delBtn.setAttribute('aria-label', 'Delete location ' + loc.name);
+    delBtn.onclick = () => deleteLocation(i);
+    actions.appendChild(loadBtn);
+    actions.appendChild(delBtn);
+
+    row.appendChild(info);
+    row.appendChild(actions);
+    list.appendChild(row);
+  });
+}
+
+renderSaved();
+calculate();
+</script>
+</body>
+</html>
